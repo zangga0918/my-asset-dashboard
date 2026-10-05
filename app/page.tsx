@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
 
 type Owner = '남편' | '아내' | '공통';
 type InvestCategory = '해외직투' | '국내직투' | 'ISA' | '개인연금저축' | 'IRP' | '퇴직금';
@@ -15,14 +16,14 @@ interface StockAsset {
   currency: 'KRW' | 'USD';
   buyDate: string;
   quantity: number;
-  buyPrice: number;     // 매입단가
-  currentPrice: number; // 실시간 현재가
+  buyPrice: number;
+  currentPrice: number;
 }
 
 interface ManualAsset {
-  home: number;        // 자가
-  jeonse: number;      // 전세금
-  deposit: number;     // 예금
+  home: number;
+  jeonse: number;
+  deposit: number;
 }
 
 interface LoanAsset {
@@ -30,11 +31,33 @@ interface LoanAsset {
   owner: Owner;
   category: LoanCategory;
   name: string;
-  amount: number;       // 대출 원금
-  interestRate: number; // 연이율 (%)
+  amount: number;
+  interestRate: number;
 }
 
-// 한글 화폐 단위(억/만) 변환
+// 초기 데이터 (사진 데이터 100% 매핑)
+const INITIAL_MANUAL_ASSETS: Record<Owner, ManualAsset> = {
+  남편: { home: 0, jeonse: 440000000, deposit: 0 },
+  아내: { home: 0, jeonse: 0, deposit: 0 },
+  공통: { home: 0, jeonse: 0, deposit: 0 },
+};
+
+const INITIAL_STOCKS: StockAsset[] = [
+  { id: '1', owner: '남편', category: '해외직투', name: '아이렌', ticker: 'IREN', currency: 'USD', buyDate: '2025-04-01', quantity: 1510, buyPrice: 12.1, currentPrice: 41.76 },
+  { id: '2', owner: '남편', category: '해외직투', name: '로켓랩', ticker: 'RKLB', currency: 'USD', buyDate: '2025-04-05', quantity: 810, buyPrice: 30.2, currentPrice: 73.92 },
+  { id: '3', owner: '남편', category: '해외직투', name: '테슬라', ticker: 'TSLA', currency: 'USD', buyDate: '2026-10-05', quantity: 55, buyPrice: 348, currentPrice: 370.59 },
+  { id: '4', owner: '남편', category: '해외직투', name: '인플렉션', ticker: 'INFQ', currency: 'USD', buyDate: '2026-04-01', quantity: 1357, buyPrice: 15.1, currentPrice: 13.15 },
+  { id: '5', owner: '남편', category: '해외직투', name: '아이온큐', ticker: 'IONQ', currency: 'USD', buyDate: '2026-04-05', quantity: 39, buyPrice: 55.5, currentPrice: 43.77 },
+  { id: '6', owner: '남편', category: '해외직투', name: '플루언스에너지', ticker: 'FLNC', currency: 'USD', buyDate: '2026-10-05', quantity: 170, buyPrice: 14.1, currentPrice: 7.61 },
+  { id: '7', owner: '남편', category: '국내직투', name: '하이닉스', ticker: '000660', currency: 'KRW', buyDate: '2026-10-05', quantity: 5, buyPrice: 1722000, currentPrice: 1841000 },
+  { id: '8', owner: '남편', category: '해외직투', name: '삼성전자', ticker: '005930', currency: 'KRW', buyDate: '2026-10-05', quantity: 271, buyPrice: 271000, currentPrice: 276000 },
+  { id: '9', owner: '남편', category: 'ISA', name: 'Kodex미국배당커버드콜액티브', ticker: '441640', currency: 'KRW', buyDate: '2026-10-05', quantity: 1251, buyPrice: 10321, currentPrice: 12120 },
+  { id: '10', owner: '남편', category: '해외직투', name: '제이알글로벌리츠', ticker: '348950', currency: 'KRW', buyDate: '2026-10-05', quantity: 2527, buyPrice: 1320, currentPrice: 1182 },
+  { id: '11', owner: '남편', category: '개인연금저축', name: 'ACE미국S&P500', ticker: '360200', currency: 'KRW', buyDate: '2026-10-05', quantity: 329, buyPrice: 20694, currentPrice: 26055 },
+  { id: '12', owner: '남편', category: '개인연금저축', name: 'ACE미국나스닥100', ticker: '367380', currency: 'KRW', buyDate: '2026-10-05', quantity: 221, buyPrice: 22374, currentPrice: 31500 },
+  { id: '13', owner: '남편', category: 'ISA', name: 'KODEX미국배당커버드콜액티브', ticker: '441640', currency: 'KRW', buyDate: '2026-10-05', quantity: 1609, buyPrice: 10812, currentPrice: 12120 },
+];
+
 function formatKoreanWon(val: number): string {
   if (!val || isNaN(val) || val <= 0) return '0원';
   const eok = Math.floor(val / 100000000);
@@ -48,7 +71,6 @@ function formatKoreanWon(val: number): string {
   return res.trim() + '원';
 }
 
-// 내부 API 서버(/api/quote)를 호출하여 실시간 시세 조회
 async function fetchStockPrice(ticker: string): Promise<{ price: number; currency: 'KRW' | 'USD' } | null> {
   const clean = ticker.trim().toUpperCase();
   if (!clean || clean === 'CUSTOM') return null;
@@ -71,42 +93,19 @@ export default function AssetDashboard() {
   const [exchangeRate, setExchangeRate] = useState<number>(1420);
   const [rateLoading, setRateLoading] = useState<boolean>(false);
   const [isUpdatingPrices, setIsUpdatingPrices] = useState<boolean>(false);
-  const [lastPriceSyncTime, setLastPriceSyncTime] = useState<string>('');
-
+  const [syncStatus, setSyncStatus] = useState<string>('클라우드 동기화 확인 중...');
+  
   const [selectedOwner, setSelectedOwner] = useState<'전체' | Owner>('전체');
   const [expandedCategory, setExpandedCategory] = useState<InvestCategory | null>(null);
 
-  // 1. 직접 금액 입력 자산 (남편, 아내, 공통)
-  const [manualAssets, setManualAssets] = useState<Record<Owner, ManualAsset>>({
-    남편: { home: 0, jeonse: 400000000, deposit: 50000000 },
-    아내: { home: 0, jeonse: 0, deposit: 30000000 },
-    공통: { home: 0, jeonse: 0, deposit: 20000000 },
-  });
+  const [manualAssets, setManualAssets] = useState<Record<Owner, ManualAsset>>(INITIAL_MANUAL_ASSETS);
+  const [loanAssets, setLoanAssets] = useState<LoanAsset[]>([]);
+  const [stockAssets, setStockAssets] = useState<StockAsset[]>(INITIAL_STOCKS);
 
-  // 2. 대출 목록
-  const [loanAssets, setLoanAssets] = useState<LoanAsset[]>([
-    { id: '1', owner: '남편', category: '주택담보대출', name: '아파트 담보대출', amount: 400000000, interestRate: 4.1 },
-    { id: '2', owner: '남편', category: '사내대출', name: '회사 복지기금 대출', amount: 200000000, interestRate: 2.0 },
-    { id: '3', owner: '남편', category: '마이너스 통장', name: '직장인 한도대출', amount: 50000000, interestRate: 4.8 },
-  ]);
-
-  // 3. 투자 자산 포트폴리오
-  const [stockAssets, setStockAssets] = useState<StockAsset[]>([
-    { id: '1', owner: '남편', category: '해외직투', name: '로켓랩', ticker: 'RKLB', currency: 'USD', buyDate: '2024-03-15', quantity: 810, buyPrice: 34.86, currentPrice: 135.76 },
-    { id: '2', owner: '남편', category: '해외직투', name: '아이렌', ticker: 'IREN', currency: 'USD', buyDate: '2024-04-10', quantity: 1510, buyPrice: 13.87, currentPrice: 56.83 },
-    { id: '3', owner: '남편', category: '해외직투', name: '테슬라', ticker: 'TSLA', currency: 'USD', buyDate: '2024-02-01', quantity: 55, buyPrice: 349.46, currentPrice: 426.01 },
-    { id: '4', owner: '아내', category: '국내직투', name: '삼성전자', ticker: '005930', currency: 'KRW', buyDate: '2024-01-20', quantity: 47, buyPrice: 171000, currentPrice: 292500 },
-    { id: '5', owner: '공통', category: 'ISA', name: 'TIGER 미국배당다우존스', ticker: '458730.KS', currency: 'KRW', buyDate: '2024-04-15', quantity: 1000, buyPrice: 10500, currentPrice: 11800 },
-    { id: '6', owner: '남편', category: '개인연금저축', name: 'TIGER 미국S&P500', ticker: '360750.KS', currency: 'KRW', buyDate: '2024-05-02', quantity: 500, buyPrice: 16500, currentPrice: 18200 },
-    { id: '7', owner: '남편', category: 'IRP', name: 'ACE 미국나스닥100', ticker: '367380.KS', currency: 'KRW', buyDate: '2024-06-11', quantity: 300, buyPrice: 15000, currentPrice: 16800 },
-  ]);
-
-  // 모달 제어
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
 
-  // 종목 기입 폼
   const [stockForm, setStockForm] = useState({
     owner: '남편' as Owner,
     category: '해외직투' as InvestCategory,
@@ -120,7 +119,6 @@ export default function AssetDashboard() {
   });
   const [isFetchingSingle, setIsFetchingSingle] = useState(false);
 
-  // 대출 기입 폼
   const [loanForm, setLoanForm] = useState({
     owner: '남편' as Owner,
     category: '주택담보대출' as LoanCategory,
@@ -129,7 +127,79 @@ export default function AssetDashboard() {
     interestRate: '',
   });
 
-  // 실시간 환율 조회
+  // Supabase 클라우드 동기화 로드
+  const loadFromSupabase = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('user_dashboard_data')
+        .select('data')
+        .eq('id', 'main_family_asset')
+        .single();
+
+      if (data && data.data) {
+        if (data.data.stocks) setStockAssets(data.data.stocks);
+        if (data.data.manual) setManualAssets(data.data.manual);
+        if (data.data.loans) setLoanAssets(data.data.loans);
+        setSyncStatus('☁️ 클라우드 동기화 완료');
+      } else {
+        // 최초 실행 시 기본 데이터를 Supabase에 자동 저장
+        await saveToSupabase(INITIAL_STOCKS, INITIAL_MANUAL_ASSETS, []);
+        setSyncStatus('☁️ 초기 데이터 클라우드 생성 완료');
+      }
+    } catch (err) {
+      console.warn('Supabase 로드 실패 (로컬 스토리지 대체):', err);
+      const savedStocks = localStorage.getItem('v10_stocks');
+      const savedManual = localStorage.getItem('v10_manual');
+      const savedLoans = localStorage.getItem('v10_loans');
+      if (savedStocks) setStockAssets(JSON.parse(savedStocks));
+      if (savedManual) setManualAssets(JSON.parse(savedManual));
+      if (savedLoans) setLoanAssets(JSON.parse(savedLoans));
+      setSyncStatus('📱 로컬 모드 동작 중');
+    }
+  };
+
+  // Supabase 클라우드 저장 함수
+  const saveToSupabase = async (
+    stocks: StockAsset[],
+    manual: Record<Owner, ManualAsset>,
+    loans: LoanAsset[]
+  ) => {
+    // 로컬 스토리지에 즉시 캐싱
+    localStorage.setItem('v10_stocks', JSON.stringify(stocks));
+    localStorage.setItem('v10_manual', JSON.stringify(manual));
+    localStorage.setItem('v10_loans', JSON.stringify(loans));
+
+    try {
+      setSyncStatus('☁️ 저장 중...');
+      const payload = { stocks, manual, loans };
+      const { error } = await supabase
+        .from('user_dashboard_data')
+        .upsert({ id: 'main_family_asset', data: payload, updated_at: new Date().toISOString() });
+
+      if (!error) {
+        setSyncStatus('☁️ 실시간 동기화 완료');
+      }
+    } catch (e) {
+      console.error('클라우드 저장 실패:', e);
+      setSyncStatus('⚠️ 로컬에만 저장됨');
+    }
+  };
+
+  const handleUpdateStocks = (newStocks: StockAsset[]) => {
+    setStockAssets(newStocks);
+    saveToSupabase(newStocks, manualAssets, loanAssets);
+  };
+
+  const handleUpdateManual = (newManual: Record<Owner, ManualAsset>) => {
+    setManualAssets(newManual);
+    saveToSupabase(stockAssets, newManual, loanAssets);
+  };
+
+  const handleUpdateLoans = (newLoans: LoanAsset[]) => {
+    setLoanAssets(newLoans);
+    saveToSupabase(stockAssets, manualAssets, newLoans);
+  };
+
   const fetchRealtimeRate = async () => {
     try {
       setRateLoading(true);
@@ -145,7 +215,6 @@ export default function AssetDashboard() {
     }
   };
 
-  // 등록된 전 종목 실시간 시세 일괄 업데이트
   const refreshAllStockPrices = async () => {
     if (isUpdatingPrices || stockAssets.length === 0) return;
     setIsUpdatingPrices(true);
@@ -165,9 +234,7 @@ export default function AssetDashboard() {
           return asset;
         })
       );
-
-      saveStocks(updatedList);
-      setLastPriceSyncTime(new Date().toLocaleTimeString());
+      handleUpdateStocks(updatedList);
     } catch (err) {
       console.error('전체 시세 갱신 중 오류:', err);
     } finally {
@@ -177,24 +244,9 @@ export default function AssetDashboard() {
 
   useEffect(() => {
     fetchRealtimeRate();
-    const savedStocks = localStorage.getItem('v9_stocks');
-    const savedManual = localStorage.getItem('v9_manual');
-    const savedLoans = localStorage.getItem('v9_loans');
-    if (savedStocks) setStockAssets(JSON.parse(savedStocks));
-    if (savedManual) setManualAssets(JSON.parse(savedManual));
-    if (savedLoans) setLoanAssets(JSON.parse(savedLoans));
-
-    // 첫 실행 시 자동 시세 1회 동기화
-    setTimeout(() => {
-      refreshAllStockPrices();
-    }, 1000);
+    loadFromSupabase();
   }, []);
 
-  const saveStocks = (d: StockAsset[]) => { setStockAssets(d); localStorage.setItem('v9_stocks', JSON.stringify(d)); };
-  const saveManual = (d: Record<Owner, ManualAsset>) => { setManualAssets(d); localStorage.setItem('v9_manual', JSON.stringify(d)); };
-  const saveLoans = (d: LoanAsset[]) => { setLoanAssets(d); localStorage.setItem('v9_loans', JSON.stringify(d)); };
-
-  // 단일 티커 실시간 시세 즉시 조회
   const handleQuerySingleTicker = async () => {
     if (!stockForm.ticker.trim()) {
       alert('티커를 먼저 입력해 주세요. (예: TSLA, AAPL, 005930)');
@@ -211,11 +263,10 @@ export default function AssetDashboard() {
         currency: quote.currency,
       }));
     } else {
-      alert(`[${stockForm.ticker}]의 실시간 시세를 찾을 수 없습니다. 티커 번호나 영문 심볼을 확인해 주세요.`);
+      alert(`[${stockForm.ticker}]의 실시간 시세를 찾을 수 없습니다.`);
     }
   };
 
-  // 통화 변환 및 수익률 산출
   const getAssetKRW = (item: StockAsset) => {
     const rate = item.currency === 'USD' ? exchangeRate : 1;
     const valKRW = item.quantity * item.currentPrice * rate;
@@ -253,7 +304,6 @@ export default function AssetDashboard() {
     return manualAssets[selectedOwner][key];
   };
 
-  // 1. 가용 자산
   const homeVal = getManualTotal('home');
   const jeonseVal = getManualTotal('jeonse');
   const depositVal = getManualTotal('deposit');
@@ -262,21 +312,17 @@ export default function AssetDashboard() {
   const isaStats = getCategoryStats('ISA');
   const liquidAssets = homeVal + jeonseVal + depositVal + overseasStats.totalVal + domesticStats.totalVal + isaStats.totalVal;
 
-  // 2. 노후 자금
   const pensionStats = getCategoryStats('개인연금저축');
   const irpStats = getCategoryStats('IRP');
   const severanceStats = getCategoryStats('퇴직금');
   const retirementAssets = pensionStats.totalVal + irpStats.totalVal + severanceStats.totalVal;
 
-  // 3. 대출 및 월 이자
   const filteredLoans = loanAssets.filter((l) => (selectedOwner === '전체' ? true : l.owner === selectedOwner));
   const totalLoanAmount = filteredLoans.reduce((sum, l) => sum + l.amount, 0);
   const totalMonthlyInterest = filteredLoans.reduce((sum, l) => sum + (l.amount * (l.interestRate / 100)) / 12, 0);
 
-  // 4. 총 순자산 = (가용 자산 + 노후 자금) - 총 대출
   const grandNetAssets = (liquidAssets + retirementAssets) - totalLoanAmount;
 
-  // 종목 저장 (현재가 미조회 시 매입가 기본값)
   const handleAddStock = (e: React.FormEvent) => {
     e.preventDefault();
     if (!stockForm.name || !stockForm.quantity || !stockForm.buyPrice) return;
@@ -297,7 +343,7 @@ export default function AssetDashboard() {
       currentPrice: currP,
     };
 
-    saveStocks([...stockAssets, newItem]);
+    handleUpdateStocks([...stockAssets, newItem]);
     setIsStockModalOpen(false);
     setStockForm({
       owner: '남편',
@@ -312,7 +358,6 @@ export default function AssetDashboard() {
     });
   };
 
-  // 대출 추가 핸들러
   const handleAddLoan = (e: React.FormEvent) => {
     e.preventDefault();
     if (!loanForm.name || !loanForm.amount || !loanForm.interestRate) return;
@@ -326,7 +371,7 @@ export default function AssetDashboard() {
       interestRate: parseFloat(loanForm.interestRate),
     };
 
-    saveLoans([...loanAssets, newLoan]);
+    handleUpdateLoans([...loanAssets, newLoan]);
     setIsLoanModalOpen(false);
     setLoanForm({
       owner: '남편',
@@ -347,9 +392,10 @@ export default function AssetDashboard() {
             <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-2">
               🏛️ 가계 통합 자산관리 대시보드
             </h1>
-            <p className="text-xs md:text-sm text-slate-400 mt-1">
-              국내·해외 실시간 시세 연동 및 가용·노후·대출 3대 자산 축 정밀 관리
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-slate-400">PC-모바일 실시간 클라우드 동기화</span>
+              <span className="text-xs text-emerald-400 font-medium">[{syncStatus}]</span>
+            </div>
           </div>
 
           <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 w-full sm:w-auto">
@@ -390,11 +436,6 @@ export default function AssetDashboard() {
               >
                 ⚡ {isUpdatingPrices ? '시세 수신 중...' : '전 종목 실시간 시세 갱신'}
               </button>
-              {lastPriceSyncTime && (
-                <span className="hidden sm:inline text-[11px] text-slate-500">
-                  (동기화: {lastPriceSyncTime})
-                </span>
-              )}
             </div>
           </div>
 
@@ -630,7 +671,7 @@ export default function AssetDashboard() {
                     <div className="text-right">
                       <p className="font-bold text-rose-400">₩{Math.round(loan.amount).toLocaleString()}</p>
                       <button
-                        onClick={() => saveLoans(loanAssets.filter((l) => l.id !== loan.id))}
+                        onClick={() => handleUpdateLoans(loanAssets.filter((l) => l.id !== loan.id))}
                         className="text-[10px] text-slate-500 hover:text-rose-400 ml-2"
                       >
                         삭제
@@ -694,7 +735,7 @@ export default function AssetDashboard() {
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <button onClick={() => saveStocks(stockAssets.filter((s) => s.id !== item.id))} className="text-slate-500 hover:text-red-400">
+                          <button onClick={() => handleUpdateStocks(stockAssets.filter((s) => s.id !== item.id))} className="text-slate-500 hover:text-red-400">
                             삭제
                           </button>
                         </td>
@@ -707,7 +748,7 @@ export default function AssetDashboard() {
           </section>
         )}
 
-        {/* 4. 전체 보유 종목 리스트 테이블 (삭제 버튼 및 원본 레이아웃 완전 유지) */}
+        {/* 4. 전체 보유 종목 리스트 테이블 */}
         <section className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
           <div className="p-4 border-b border-slate-800 flex justify-between items-center">
             <h2 className="text-sm md:text-base font-bold text-slate-200">
@@ -775,7 +816,7 @@ export default function AssetDashboard() {
                         </td>
                         <td className="py-2.5 px-3 text-center">
                           <button
-                            onClick={() => saveStocks(stockAssets.filter((s) => s.id !== item.id))}
+                            onClick={() => handleUpdateStocks(stockAssets.filter((s) => s.id !== item.id))}
                             className="text-slate-500 hover:text-red-400 text-xs transition"
                           >
                             삭제
@@ -813,7 +854,7 @@ export default function AssetDashboard() {
                             type="number"
                             value={currentVal || ''}
                             placeholder="0"
-                            onChange={(e) => saveManual({
+                            onChange={(e) => handleUpdateManual({
                               ...manualAssets,
                               [ownerKey]: { ...manualAssets[ownerKey], [fieldKey]: Number(e.target.value) }
                             })}
@@ -924,7 +965,7 @@ export default function AssetDashboard() {
           </div>
         )}
 
-        {/* 모달 3: 주식 추가 (티커 기반 실시간 시세 즉시 조회) */}
+        {/* 모달 3: 주식 추가 */}
         {isStockModalOpen && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-slate-900 border border-slate-700 w-full max-w-md p-6 rounded-3xl shadow-2xl">
