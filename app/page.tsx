@@ -35,7 +35,7 @@ interface LoanAsset {
   interestRate: number;
 }
 
-// 캡처 화면 원본 데이터 100% 반영
+// 캡처 화면 13개 종목 및 전세금 4.4억 데이터 반영
 const INITIAL_MANUAL_ASSETS: Record<Owner, ManualAsset> = {
   남편: { home: 0, jeonse: 440000000, deposit: 0 },
   아내: { home: 0, jeonse: 0, deposit: 0 },
@@ -69,8 +69,9 @@ function formatKoreanWon(val: number): string {
 }
 
 export default function AssetDashboard() {
-  const [exchangeRate, setExchangeRate] = useState<number>(1420);
-  const [selectedOwner, setSelectedOwner] = useState<'전체' | Owner>('전체');
+  const [exchangeRate] = useState<number>(1420);
+  const [selectedOwner] = useState<'전체' | Owner>('전체');
+  const [expandedCategory, setExpandedCategory] = useState<InvestCategory | null>(null);
 
   const [manualAssets, setManualAssets] = useState<Record<Owner, ManualAsset>>(INITIAL_MANUAL_ASSETS);
   const [loanAssets, setLoanAssets] = useState<LoanAsset[]>([]);
@@ -95,7 +96,7 @@ export default function AssetDashboard() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('user_dashboard_data')
           .select('data')
           .eq('id', 'main_family_asset')
@@ -106,7 +107,6 @@ export default function AssetDashboard() {
           if (data.data.manual) setManualAssets(data.data.manual);
           if (data.data.loans) setLoanAssets(data.data.loans);
         } else {
-          // DB가 비어있으면 초기 캡처 데이터를 Supabase에 저장
           await syncToSupabase(INITIAL_STOCKS, INITIAL_MANUAL_ASSETS, []);
         }
       } catch (err) {
@@ -116,7 +116,6 @@ export default function AssetDashboard() {
     loadData();
   }, []);
 
-  // Supabase 저장 함수
   const syncToSupabase = async (
     stocks: StockAsset[],
     manual: Record<Owner, ManualAsset>,
@@ -170,7 +169,7 @@ export default function AssetDashboard() {
 
     const profit = totalVal - totalCost;
     const roi = totalCost > 0 ? (profit / totalCost) * 100 : 0;
-    return { totalVal, totalCost, profit, roi };
+    return { totalVal, totalCost, profit, roi, items: filtered };
   };
 
   const getManualTotal = (key: keyof ManualAsset) => {
@@ -193,6 +192,10 @@ export default function AssetDashboard() {
 
   const totalLoanAmount = loanAssets.reduce((sum, l) => sum + l.amount, 0);
   const grandNetAssets = liquidAssets + retirementAssets - totalLoanAmount;
+
+  const handleToggleCategory = (cat: InvestCategory) => {
+    setExpandedCategory(expandedCategory === cat ? null : cat);
+  };
 
   const handleAddStock = (e: React.FormEvent) => {
     e.preventDefault();
@@ -222,7 +225,7 @@ export default function AssetDashboard() {
     <div className="min-h-screen bg-[#060b13] text-slate-100 p-6 font-sans">
       <div className="max-w-6xl mx-auto space-y-5">
         
-        {/* 상단 환율 & 버튼 영역 (원본 동일) */}
+        {/* 상단 환율 & 버튼 영역 */}
         <div className="flex justify-between items-center text-xs">
           <div className="flex items-center gap-1.5 font-bold">
             <span className="text-slate-400 font-normal">기준 환율:</span>
@@ -244,7 +247,7 @@ export default function AssetDashboard() {
           </div>
         </div>
 
-        {/* 1. 최상단 순자산 카드 (원본 디자인/배치 100% 동일) */}
+        {/* 1. 최상단 순자산 카드 */}
         <div className="bg-[#0b1322] border border-slate-800/80 p-7 rounded-2xl">
           <div className="flex justify-between items-start">
             <div>
@@ -282,7 +285,7 @@ export default function AssetDashboard() {
           </div>
         </div>
 
-        {/* 2. 자산 3대 영역 카드 (원본 캡처 UI 100% 복원) */}
+        {/* 2. 자산 3대 영역 카드 */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           
           {/* 가용 가능한 금액 */}
@@ -297,30 +300,40 @@ export default function AssetDashboard() {
                 <p className="font-bold text-white mt-0.5">₩{Math.round(jeonseVal).toLocaleString()}</p>
                 <p className="text-[10px] text-slate-500">{formatKoreanWon(jeonseVal)}</p>
               </div>
-              <div>
+              <div onClick={() => handleToggleCategory('해외직투')} className="cursor-pointer hover:opacity-80 transition">
                 <span className="text-[10px] text-blue-400 font-medium">해외직투 ▾</span>
                 <p className="font-bold text-white mt-0.5">₩{Math.round(overseasStats.totalVal).toLocaleString()}</p>
               </div>
-              <div>
+              <div onClick={() => handleToggleCategory('국내직투')} className="cursor-pointer hover:opacity-80 transition">
                 <span className="text-[10px] text-blue-400 font-medium">국내직투 ▾</span>
                 <p className="font-bold text-white mt-0.5">₩{Math.round(domesticStats.totalVal).toLocaleString()}</p>
               </div>
-              <div>
+              <div onClick={() => handleToggleCategory('ISA')} className="cursor-pointer hover:opacity-80 transition">
                 <span className="text-[10px] text-blue-400 font-medium">ISA ▾</span>
                 <p className="font-bold text-white mt-0.5">₩{Math.round(isaStats.totalVal).toLocaleString()}</p>
               </div>
             </div>
           </div>
 
-          {/* 노후 자금 */}
+          {/* 노후 자금 (개인연금저축 / IRP / 퇴직금) */}
           <div className="bg-[#0b1322] border border-slate-800/80 rounded-2xl p-5">
             <div className="flex justify-between items-center pb-4">
               <span className="text-xs font-bold text-slate-200">노후 자금</span>
               <span className="text-xs font-bold text-[#f59e0b]">{formatKoreanWon(retirementAssets)}</span>
             </div>
-            <div>
-              <span className="text-[10px] text-[#f59e0b] font-medium">개인연금저축 ▾</span>
-              <p className="font-bold text-white mt-0.5 text-xs">₩{Math.round(pensionStats.totalVal).toLocaleString()}</p>
+            <div className="space-y-3 text-xs">
+              <div onClick={() => handleToggleCategory('개인연금저축')} className="cursor-pointer hover:opacity-80 transition flex justify-between items-center">
+                <span className="text-[10px] text-[#f59e0b] font-medium">개인연금저축 ▾</span>
+                <p className="font-bold text-white">₩{Math.round(pensionStats.totalVal).toLocaleString()}</p>
+              </div>
+              <div onClick={() => handleToggleCategory('IRP')} className="cursor-pointer hover:opacity-80 transition flex justify-between items-center">
+                <span className="text-[10px] text-[#f59e0b] font-medium">IRP ▾</span>
+                <p className="font-bold text-white">₩{Math.round(irpStats.totalVal).toLocaleString()}</p>
+              </div>
+              <div onClick={() => handleToggleCategory('퇴직금')} className="cursor-pointer hover:opacity-80 transition flex justify-between items-center">
+                <span className="text-[10px] text-[#f59e0b] font-medium">퇴직금 ▾</span>
+                <p className="font-bold text-white">₩{Math.round(severanceStats.totalVal).toLocaleString()}</p>
+              </div>
             </div>
           </div>
 
@@ -335,7 +348,73 @@ export default function AssetDashboard() {
 
         </div>
 
-        {/* 3. 보유 투자 종목 리스트 테이블 (원본 13개 데이터 완벽 매핑) */}
+        {/* 3. 카테고리 클릭 시 열리는 세부 보유 종목 영역 */}
+        {expandedCategory && (
+          <div className="bg-[#0b1322] border border-blue-500/50 rounded-2xl p-5 transition-all">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-800/80">
+              <h3 className="text-xs font-bold text-blue-400">
+                📂 {expandedCategory} 세부 보유 종목
+              </h3>
+              <button
+                onClick={() => setExpandedCategory(null)}
+                className="text-xs text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800/80"
+              >
+                닫기 ✕
+              </button>
+            </div>
+            <div className="overflow-x-auto mt-3">
+              <table className="w-full text-left text-xs">
+                <thead className="text-[11px] text-slate-500 border-b border-slate-800/80 bg-[#080e18]">
+                  <tr>
+                    <th className="py-2 px-3">종목(티커)</th>
+                    <th className="py-2 px-3">매입일자</th>
+                    <th className="py-2 px-3">수량</th>
+                    <th className="py-2 px-3">매입단가</th>
+                    <th className="py-2 px-3">현재가</th>
+                    <th className="py-2 px-3">원화 평가액</th>
+                    <th className="py-2 px-3">수익률</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {getCategoryStats(expandedCategory).items.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-4 text-slate-600">등록된 종목이 없습니다.</td>
+                    </tr>
+                  ) : (
+                    getCategoryStats(expandedCategory).items.map((item) => {
+                      const { valKRW, roi } = getAssetKRW(item);
+                      const isProfit = roi >= 0;
+                      return (
+                        <tr key={item.id} className="hover:bg-slate-800/20">
+                          <td className="py-2.5 px-3">
+                            <span className="font-bold text-white block">{item.name}</span>
+                            <span className="text-[10px] text-slate-500">{item.ticker}</span>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-500">{item.buyDate}</td>
+                          <td className="py-2.5 px-3 text-slate-200">{item.quantity.toLocaleString()}</td>
+                          <td className="py-2.5 px-3 text-slate-400">
+                            {item.currency === 'USD' ? `$${item.buyPrice}` : `₩${item.buyPrice.toLocaleString()}`}
+                          </td>
+                          <td className="py-2.5 px-3 font-semibold text-[#00e5a3]">
+                            {item.currency === 'USD' ? `$${item.currentPrice}` : `₩${item.currentPrice.toLocaleString()}`}
+                          </td>
+                          <td className="py-2.5 px-3 font-bold text-white">₩{Math.round(valKRW).toLocaleString()}</td>
+                          <td className="py-2.5 px-3">
+                            <span className={`font-semibold ${isProfit ? 'text-rose-500' : 'text-blue-400'}`}>
+                              {isProfit ? '+' : ''}{roi.toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* 4. 전체 보유 투자 종목 리스트 테이블 (13개 종목) */}
         <div className="bg-[#0b1322] border border-slate-800/80 rounded-2xl overflow-hidden">
           <div className="p-4 border-b border-slate-800/80">
             <h2 className="text-xs font-bold text-slate-200">
@@ -439,6 +518,28 @@ export default function AssetDashboard() {
             <div className="bg-[#0b1322] border border-slate-700 w-full max-w-sm p-5 rounded-2xl shadow-xl">
               <h3 className="text-sm font-bold text-white mb-3">투자 종목 추가</h3>
               <form onSubmit={handleAddStock} className="space-y-2 text-xs">
+                <div>
+                  <label className="text-slate-400">계좌 분류</label>
+                  <select
+                    value={stockForm.category}
+                    onChange={(e) => {
+                      const cat = e.target.value as InvestCategory;
+                      setStockForm({
+                        ...stockForm,
+                        category: cat,
+                        currency: cat === '해외직투' ? 'USD' : 'KRW',
+                      });
+                    }}
+                    className="w-full bg-[#060b13] border border-slate-700 rounded-lg p-2 text-white mt-0.5"
+                  >
+                    <option value="해외직투">해외직투</option>
+                    <option value="국내직투">국내직투</option>
+                    <option value="ISA">ISA</option>
+                    <option value="개인연금저축">개인연금저축</option>
+                    <option value="IRP">IRP</option>
+                    <option value="퇴직금">퇴직금</option>
+                  </select>
+                </div>
                 <div>
                   <label className="text-slate-400">종목명</label>
                   <input
